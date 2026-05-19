@@ -2,36 +2,93 @@ import pickle
 import streamlit as st
 import pandas as pd
 import requests
+from urllib.parse import quote
+from PIL import Image
+from io import BytesIO
 
 # -------------------------------
-# Fetch Poster Function
+# Page Config
 # -------------------------------
-def fetch_poster(movie_id):
-    url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key=8265bd1679663a7ea12ac168da84d2e8&language=en-US"
+st.set_page_config(
+    page_title="AI Movie Recommender",
+    page_icon="🎬",
+    layout="wide"
+)
+
+# -------------------------------
+# Load CSS
+# -------------------------------
+def load_css():
+    with open("style.css") as f:
+        st.markdown(
+            f"<style>{f.read()}</style>",
+            unsafe_allow_html=True
+        )
+
+load_css()
+
+# -------------------------------
+# OMDb API Key
+# -------------------------------
+API_KEY = "8c29a9fd"
+
+# -------------------------------
+# Default Poster
+# -------------------------------
+DEFAULT_POSTER = "https://upload.wikimedia.org/wikipedia/en/7/7a/1917poster.jpg"
+
+# -------------------------------
+# Fetch Movie Details
+# -------------------------------
+def fetch_movie_details(movie_name):
 
     try:
-        response = requests.get(url, timeout=5)
 
-        if response.status_code != 200:
-            return "https://via.placeholder.com/500x750?text=Poster+Not+Found"
+        movie_name = quote(movie_name)
+
+        url = f"https://www.omdbapi.com/?t={movie_name}&apikey={API_KEY}"
+
+        response = requests.get(url, timeout=10)
 
         data = response.json()
-        poster_path = data.get("poster_path")
 
-        if poster_path is None:
-            return "https://via.placeholder.com/500x750?text=No+Poster"
+        poster = data.get("Poster", DEFAULT_POSTER)
 
-        return "https://image.tmdb.org/t/p/w500/" + poster_path
+        if poster == "N/A":
+            poster = DEFAULT_POSTER
 
-    except:
-        return "https://via.placeholder.com/500x750?text=Network+Error"
+        # convert http to https
+        if poster.startswith("http://"):
+            poster = poster.replace("http://", "https://")
+
+        return {
+            "poster": poster,
+            "rating": data.get("imdbRating", "N/A"),
+            "genre": data.get("Genre", "N/A"),
+            "plot": data.get("Plot", "No description available"),
+            "year": data.get("Year", "N/A")
+        }
+
+    except Exception as e:
+
+        print(e)
+
+        return {
+            "poster": DEFAULT_POSTER,
+            "rating": "N/A",
+            "genre": "N/A",
+            "plot": "No description available",
+            "year": "N/A"
+        }
 
 
 # -------------------------------
 # Recommendation Function
 # -------------------------------
 def recommend(movie):
+
     movie_index = movies[movies["title"] == movie].index[0]
+
     distances = similarity[movie_index]
 
     movie_list = sorted(
@@ -41,60 +98,173 @@ def recommend(movie):
     )[1:6]
 
     recommended_movies = []
-    recommended_movies_posters = []
 
     for i in movie_list:
-        row = movies.iloc[i[0]]
 
-        movie_id = row["id"]   # ✅ FIXED (Correct Column)
+        movie_title = movies.iloc[i[0]].title
 
-        recommended_movies.append(row["title"])
-        recommended_movies_posters.append(fetch_poster(movie_id))
+        movie_details = fetch_movie_details(movie_title)
 
-    return recommended_movies, recommended_movies_posters
+        recommended_movies.append({
+            "title": movie_title,
+            "poster": movie_details["poster"],
+            "rating": movie_details["rating"],
+            "genre": movie_details["genre"],
+            "year": movie_details["year"],
+            "plot": movie_details["plot"]
+        })
+
+    return recommended_movies
 
 
 # -------------------------------
 # Load Pickle Files
 # -------------------------------
-movies = pickle.load(open("movies.pkl", "rb"))
-similarity = pickle.load(open("similarity.pkl", "rb"))
+with open("movie_dict.pkl", "rb") as f:
+    movies_dict = pickle.load(f)
 
-movies = pd.DataFrame(movies)
+movies = pd.DataFrame(movies_dict)
+
+with open("similarity.pkl", "rb") as f:
+    similarity = pickle.load(f)
 
 # -------------------------------
-# Streamlit UI
+# Header Section
 # -------------------------------
-st.title("🎬 Movie Recommender System")
+st.markdown(
+    "<h1>🎬 AI Movie Recommender</h1>",
+    unsafe_allow_html=True
+)
 
+st.markdown(
+    "<div class='subtitle'>Discover movies you'll love 🍿</div>",
+    unsafe_allow_html=True
+)
+
+st.write("")
+
+# -------------------------------
+# Movie Selection
+# -------------------------------
 selected_movie_name = st.selectbox(
-    "Select a movie to get recommendations:",
+    "🎥 Choose Your Favorite Movie",
     movies["title"].values
 )
 
-if st.button("Recommend"):
-    names, posters = recommend(selected_movie_name)
+# -------------------------------
+# Recommendation Button
+# -------------------------------
+if st.button("Recommend Movies"):
 
-    st.subheader("Top 5 Recommended Movies:")
+    with st.spinner("Finding awesome movies for you... 🍿"):
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+        recommended_movies = recommend(selected_movie_name)
 
-    with col1:
-        st.text(names[0])
-        st.image(posters[0])
+    st.subheader("🔥 Top Recommended Movies")
 
-    with col2:
-        st.text(names[1])
-        st.image(posters[1])
+    cols = st.columns(5)
 
-    with col3:
-        st.text(names[2])
-        st.image(posters[2])
+    for idx, col in enumerate(cols):
 
-    with col4:
-        st.text(names[3])
-        st.image(posters[3])
+        movie = recommended_movies[idx]
 
-    with col5:
-        st.text(names[4])
-        st.image(posters[4])
+        with col:
+
+            st.markdown(
+                "<div class='movie-card'>",
+                unsafe_allow_html=True
+            )
+
+            # -------------------------------
+            # Poster Section
+            # -------------------------------
+            try:
+
+                poster_url = movie["poster"]
+
+                headers = {
+                    "User-Agent": "Mozilla/5.0"
+                }
+
+                response = requests.get(
+                    poster_url,
+                    headers=headers,
+                    timeout=10
+                )
+
+                image = Image.open(
+                    BytesIO(response.content)
+                )
+
+                st.image(
+                    image,
+                    use_container_width=True
+                )
+
+            except Exception as e:
+
+                st.write(e)
+
+                st.image(
+                    DEFAULT_POSTER,
+                    use_container_width=True
+                )
+
+            # -------------------------------
+            # Movie Title
+            # -------------------------------
+            st.markdown(
+                f"""
+                <div class='movie-title'>
+                    {movie["title"]}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # -------------------------------
+            # IMDb Rating
+            # -------------------------------
+            st.markdown(
+                f"""
+                <p style='color:#FFD700;
+                          text-align:center;
+                          font-weight:bold;'>
+                    ⭐ IMDb: {movie["rating"]}
+                </p>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # -------------------------------
+            # Genre
+            # -------------------------------
+            st.markdown(
+                f"""
+                <p style='color:#cbd5e1;
+                          text-align:center;
+                          font-size:14px;'>
+                    🎭 {movie["genre"]}
+                </p>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # -------------------------------
+            # Release Year
+            # -------------------------------
+            st.markdown(
+                f"""
+                <p style='color:#94a3b8;
+                          font-size:13px;
+                          text-align:center;'>
+                    📅 {movie["year"]}
+                </p>
+                """,
+                unsafe_allow_html=True
+            )
+
+            st.markdown(
+                "</div>",
+                unsafe_allow_html=True
+            )
